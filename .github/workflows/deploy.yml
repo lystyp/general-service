@@ -13,13 +13,23 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Create production .env file
+      run: |
+        echo "Creating production .env file from .env.example..."
+        cp .env.example .env
+        
+        # 替換環境變數為真實值
+        sed -i 's/LINE_CHANNEL_ID=.*/LINE_CHANNEL_ID=${{ secrets.LINE_CHANNEL_ID }}/' .env
+        sed -i 's/LINE_CHANNEL_SECRET=.*/LINE_CHANNEL_SECRET=${{ secrets.LINE_CHANNEL_SECRET }}/' .env
+        sed -i 's/LINE_LOGIN_CALLBACK_URL=.*/LINE_LOGIN_CALLBACK_URL=${{ secrets.LINE_LOGIN_CALLBACK_URL }}/' .env
+        sed -i 's/FLASK_SECRET_KEY=.*/FLASK_SECRET_KEY=${{ secrets.FLASK_SECRET_KEY }}/' .env
+        
+        echo "Production .env file created and updated with secrets"
+
     - name: Authenticate with GCP
       uses: google-github-actions/auth@v2
       with:
         credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
-
-    - name: Print GCP_PROJECT_ID
-      run: echo "GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}"
 
     - name: Deploy to App Engine
       uses: google-github-actions/deploy-appengine@v2
