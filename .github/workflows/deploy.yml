@@ -19,11 +19,11 @@ jobs:
         cp .env.example .env
         
         # 替換環境變數為真實值
-        sed -i 's/LINE_CHANNEL_ID=.*/LINE_CHANNEL_ID=${{ secrets.LINE_CHANNEL_ID }}/' .env
-        sed -i 's/LINE_CHANNEL_SECRET=.*/LINE_CHANNEL_SECRET=${{ secrets.LINE_CHANNEL_SECRET }}/' .env
-        sed -i 's/LINE_LOGIN_CALLBACK_URL=.*/LINE_LOGIN_CALLBACK_URL=${{ secrets.LINE_LOGIN_CALLBACK_URL }}/' .env
-        sed -i 's/FLASK_SECRET_KEY=.*/FLASK_SECRET_KEY=${{ secrets.FLASK_SECRET_KEY }}/' .env
-        
+        sed -i "s|LINE_CHANNEL_ID=.*|LINE_CHANNEL_ID=${LINE_CHANNEL_ID}|" .env
+        sed -i "s|LINE_CHANNEL_SECRET=.*|LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}|" .env
+        sed -i "s|LINE_LOGIN_CALLBACK_URL=.*|LINE_LOGIN_CALLBACK_URL=${LINE_LOGIN_CALLBACK_URL}|" .env
+        sed -i "s|FLASK_SECRET_KEY=.*|FLASK_SECRET_KEY=${FLASK_SECRET_KEY}|" .env
+
         echo "Production .env file created and updated with secrets"
 
     - name: Authenticate with GCP
