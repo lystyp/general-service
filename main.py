@@ -304,3 +304,4 @@ def get_user_profile(access_token):
 if __name__ == '__main__':
     logger.debug("Starting Flask app...")
     app.run(host="127.0.0.1", port=8080, debug=True)
+    print("Flask app is running at http://127.0.0.1:8080")
