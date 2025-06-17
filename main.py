@@ -1,9 +1,11 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g
 import requests
 import secrets
 import os
 import logging
-from datetime import datetime
+import json
+import uuid
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # 載入環境變數
@@ -12,9 +14,93 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your-default-secret-key')
 
-# 設定 logging
-logging.basicConfig(level=logging.INFO)
+# 設定 JSON 格式的 logging
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_entry = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'level': record.levelname,
+            'logger': record.name,
+            'message': record.getMessage(),
+        }
+        
+        # 只在 Flask 應用程式上下文中嘗試存取 g 物件
+        try:
+            if hasattr(g, 'request_id'):
+                log_entry['request_id'] = g.request_id
+            else:
+                log_entry['request_id'] = None
+        except RuntimeError:
+            # 沒有應用程式上下文時
+            log_entry['request_id'] = None
+        
+        # 添加額外的上下文資訊
+        if hasattr(record, 'user_id'):
+            log_entry['user_id'] = record.user_id
+        if hasattr(record, 'http_method'):
+            log_entry['http_method'] = record.http_method
+        if hasattr(record, 'http_url'):
+            log_entry['http_url'] = record.http_url
+        if hasattr(record, 'http_status'):
+            log_entry['http_status'] = record.http_status
+        if hasattr(record, 'response_time'):
+            log_entry['response_time'] = record.response_time
+            
+        return json.dumps(log_entry, ensure_ascii=False)
+
+# 配置 logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+
+# 設定自定義格式器
 logger = logging.getLogger(__name__)
+for handler in logger.handlers:
+    handler.setFormatter(JsonFormatter())
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(JsonFormatter())
+
+@app.before_request
+def before_request():
+    """在每個請求前生成唯一的請求 ID"""
+    g.request_id = str(uuid.uuid4())
+    g.start_time = datetime.now(timezone.utc)
+    
+    # 記錄請求開始
+    logger.info(
+        f"Request started: {request.method} {request.url}",
+        extra={
+            'http_method': request.method,
+            'http_url': request.url,
+            'user_agent': request.headers.get('User-Agent', ''),
+            'remote_addr': request.remote_addr,
+            'headers': dict(request.headers)
+        }
+    )
+
+@app.after_request
+def after_request(response):
+    """在每個請求後記錄響應詳情"""
+    if hasattr(g, 'start_time'):
+        response_time = (datetime.now(timezone.utc) - g.start_time).total_seconds()
+    else:
+        response_time = None
+        
+    logger.info(
+        f"Request completed: {request.method} {request.url}",
+        extra={
+            'http_method': request.method,
+            'http_url': request.url,
+            'http_status': response.status_code,
+            'response_time': response_time,
+            'content_length': response.content_length
+        }
+    )
+    return response
 
 # LINE Login 設定
 LINE_CHANNEL_ID = os.getenv('LINE_CHANNEL_ID')
@@ -58,11 +144,26 @@ def callback():
     
     # 驗證 state 參數
     if not state or state != session.get('state'):
-        logger.error("State parameter mismatch")
+        logger.error(
+        f"State parameter mismatch: expected {session.get('state')}, got {state}",
+        extra={
+            'event_type': 'login_error',
+            'error_type': 'state_mismatch',
+            'expected_state': session.get('state'),
+            'received_state': state
+        }
+    )
         return "登入失敗：狀態驗證錯誤", 400
     
     if not code:
-        logger.error("No authorization code received")
+        logger.error(
+        "No authorization code received from LINE",
+        extra={
+            'event_type': 'login_error',
+            'error_type': 'no_auth_code',
+            'request_args': dict(request.args)
+        }
+    )
         return "登入失敗：未收到授權碼", 400
     
     try:
@@ -77,7 +178,15 @@ def callback():
             return "登入失敗：無法獲取用戶資料", 400
         
         # 記錄用戶資料
-        logger.info(f"User login: {user_data}")
+        logger.info(
+            f"User login successful: {user_data.get('displayName', 'Unknown')}",
+            extra={
+                'user_id': user_data.get('userId'),
+                'user_name': user_data.get('displayName'),
+                'user_picture': user_data.get('pictureUrl'),
+                'event_type': 'user_login'
+            }
+        )
         
         # 儲存用戶資料到 session
         session['user_data'] = user_data
@@ -86,7 +195,15 @@ def callback():
         return redirect(url_for('success'))
         
     except Exception as e:
-        logger.error(f"Login error: {str(e)}")
+        logger.error(
+            f"Login process failed: {str(e)}",
+            extra={
+                'event_type': 'login_error',
+                'error_type': 'exception',
+                'error_message': str(e),
+                'error_class': e.__class__.__name__
+            }
+        )
         return f"登入失敗：{str(e)}", 500
 
 @app.route('/success')
@@ -104,7 +221,15 @@ def success():
 def logout():
     """登出功能"""
     user_data = session.get('user_data', {})
-    logger.info(f"User logout: {user_data.get('displayName', 'Unknown')} ({user_data.get('userId', 'Unknown')})")
+    logger.info(
+        f"User logout: {user_data.get('displayName', 'Unknown')}",
+        extra={
+            'user_id': user_data.get('userId', 'Unknown'),
+            'user_name': user_data.get('displayName', 'Unknown'),
+            'event_type': 'user_logout',
+            'session_duration': session.get('login_time')
+        }
+    )
     
     session.clear()
     return redirect(url_for('login'))
@@ -114,7 +239,25 @@ def api_user():
     """API：獲取當前用戶資料"""
     user_data = session.get('user_data')
     if not user_data:
+        logger.warning(
+            "API access attempted without login",
+            extra={
+                'event_type': 'unauthorized_access',
+                'endpoint': '/api/user',
+                'session_id': session.get('session_id')
+            }
+        )
         return jsonify({'error': 'Not logged in'}), 401
+    
+    logger.info(
+        f"API user data requested by {user_data.get('displayName', 'Unknown')}",
+        extra={
+            'event_type': 'api_access',
+            'endpoint': '/api/user',
+            'user_id': user_data.get('userId'),
+            'user_name': user_data.get('displayName')
+        }
+    )
     
     return jsonify({
         'user': user_data,
@@ -159,4 +302,5 @@ def get_user_profile(access_token):
         return None
 
 if __name__ == '__main__':
+    logger.debug("Starting Flask app...")
     app.run(host="127.0.0.1", port=8080, debug=True)
